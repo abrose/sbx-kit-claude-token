@@ -1,0 +1,17 @@
+schemaVersion: "1"
+agent: sbx-kit-claude
+kits:
+  - docker.io/docker/sbx-kit-claude:latest
+  - source: ..
+# The approval that sbx wants before it injects the kit's credential. sbx merges it into the global
+# ~/.config/sbx/credentials.yaml. The check binds a marker for the sandbox; this file names no secret.
+bindings:
+  claude-subscription:
+    apiKey:
+      domains:
+        - api.anthropic.com
+sandboxOptions:
+  template: sbx-stack-base:0               # the base image, loaded by build.sh in sbx-stack-base
+  pullPolicy: never
+  skills: "off"
+workspace: ./ws

@@ -1,0 +1,28 @@
+# syntax=docker/sandbox-kit:3
+schemaVersion: "3"
+displayName: Claude token
+description: A Claude subscription token for one sandbox. The sbx proxy sends it, the VM holds a placeholder
+kind: mixin
+version: "0.1.0"
+
+capabilities:
+  # sbx refuses a credential whose inject domain is not in the kit's own runtime rules. The Claude kit allows the
+  # host too.
+  - type: com.docker.sandbox/network-policy@2
+    config:
+      runtime:
+        allow:
+          - hosts: [api.anthropic.com]
+  # Not optional: with no bound token, sbx env create prints "required credential not found". The create does not
+  # fail, and the proxy then sets nothing: the global login of sbx is not in use, Anthropic answers 401.
+  - type: com.docker.sandbox/credential@1
+    optional: false
+    description: Claude subscription token for this sandbox (from claude setup-token)
+    config:
+      service: claude-subscription
+      phase: runtime
+      apiKey:
+        name: CLAUDE_CODE_OAUTH_TOKEN
+        proxyManaged: true          # the VM sees a placeholder, never the value
+        inject:
+          - {domain: api.anthropic.com, header: Authorization, format: "Bearer %s"}
