@@ -66,14 +66,15 @@ bindings:
         - api.anthropic.com
 secrets:
   claude-subscription:
-    command: gopass show -o <path of the token>   # runs on the Mac, at the create
-    snapshot: true                                # sbx reads the value one time
+    command: /opt/homebrew/bin/gopass show -o <path of the token>   # runs on the Mac, at the create
+    snapshot: true                                                  # sbx reads the value one time
 ```
 
 | Part | Why |
 |---|---|
 | `bindings` | The approval for the credential. sbx merges it into the global `~/.config/sbx/credentials.yaml`. Without it sbx does not inject the token ("no binding authorizes claude-subscription") |
 | `secrets` | The source of the token. `sbx env create` shows the command and asks for approval. The secret is stored for this sandbox only |
+| The absolute path in `command` | sbx runs the command on the Mac, in a new temporary folder. Name the program by its absolute path (`command -v gopass` prints it), so that the `PATH` of the shell does not choose the program that gives the token. gopass is one choice, not a dependency |
 
 `kit.allowedSources` in the sbx settings must allow the source of the kit.
 
@@ -112,7 +113,8 @@ bash tests/check.sh
 ```
 
 The check needs the base image `sbx-stack-base` (run `build.sh` there first). It needs no token and makes no model
-call. It stops when a global `claude-subscription` secret exists. `KEEP=1` leaves the sandboxes for a look after a
+call. It stops, before it changes anything, when a global `claude-subscription` secret exists or when `sbx secret ls`
+fails. A failing `sbx` listing is a FAIL, never "nothing there". `KEEP=1` leaves the sandboxes for a look after a
 failure.
 
 | Sandbox | What the check asserts |

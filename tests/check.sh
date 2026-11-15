@@ -25,10 +25,11 @@ marker=sk-ant-oat01-marker-not-a-secret-0000000000000000
 marker_re='sk-ant-oat01-marker-not-a-secret-[0]000000000000000'
 # The control proves that the search for the marker can find a value at all.
 control=sbx-control-not-a-secret-1111111111111111
-log=$(mktemp)
-create_log=$(mktemp)
 fails=0
 in_vm=$name
+# The check sets "reported" before each exit that it explains itself. Every other exit with a failure is a step that
+# is no assertion (set -e stops the check there): cleanup then prints the FAIL line.
+reported=
 
 # api <bearer> runs in the sandbox: one request to the Messages API with no messages, so Anthropic makes no model
 # call. With a valid login the answer is 400, with no valid login it is 401. The headers go to /tmp/h, the body to
@@ -44,10 +45,30 @@ api_fn='api() {
 # An answer 400 means a valid login: the proxy then set the global login of sbx on the request.
 not_sent='[ "$(cat /tmp/s)" = 401 ] && grep -q "Invalid bearer token" /tmp/b'
 
+# The check reads "nothing there" from a listing of sbx. A failing sbx must never look like an empty listing: the two
+# functions below return 2 then, and "no" takes only the status 1 as "not there".
+
 # has_secret <scope> [<service>]: sbx has a secret of the service in the scope ("(global)" or a sandbox name)
 has_secret() {
-  sbx secret ls 2>/dev/null | awk -v scope="$1" -v service="${2:-$service}" \
-    '$1 == scope && $2 == "service" && $3 == service { found = 1 } END { exit !found }'
+  local out
+  out=$(sbx secret ls) || return 2
+  awk -v scope="$1" -v service="${2:-$service}" \
+    '$1 == scope && $2 == "service" && $3 == service { found = 1 } END { exit !found }' <<<"$out"
+}
+
+# listed <regex> <sbx arguments...>: a line of the sbx listing matches the extended regular expression
+listed() {
+  local re=$1 out
+  shift
+  out=$(sbx "$@") || return 2
+  grep -qE "$re" <<<"$out"
+}
+
+# no <function> <arguments...>: the function says "not there"
+no() {
+  local status=0
+  "$@" || status=$?
+  [ "$status" -eq 1 ]
 }
 
 remove_all() {
@@ -61,11 +82,19 @@ remove_all() {
 }
 
 cleanup() {
+  local status=$?
+  # set -e can stop the check inside a group whose output goes to the log. So the report goes to the saved stdout.
+  if [ "$status" -ne 0 ] && [ -z "$reported" ]; then
+    {
+      echo "FAIL the check stopped at a step that is no assertion (exit $status)"
+      echo "--- the last lines of the log ---"
+      tail -30 "$log"
+    } >&3 2>&1
+  fi
   # KEEP=1 leaves the sandboxes, the marker and the workspaces for a look after a failure.
   [ -n "${KEEP:-}" ] || remove_all
   rm -f "$log" "$create_log"
 }
-trap cleanup EXIT
 
 pass() { echo "PASS $1"; }
 
@@ -101,11 +130,17 @@ restart() {
   } >>"$log" 2>&1
 }
 
-# The apt hosts are the base image's.
+# The apt hosts are the base image's. The log must hold the check's own requests to api.anthropic.com: a failed or
+# empty log would look like "nothing blocked".
 no_other_blocked_host() {
-  local hosts
-  hosts=$(sbx policy log "$name" --json | jq -r '.blocked[].host' | sort -u |
-    grep -vxE '(deb\.debian\.org|dhi\.io):80' || true)
+  local json hosts
+  json=$(sbx policy log "$name" --json) || return 1
+  jq -e 'any(.allowed[]?; .host == "api.anthropic.com:443")' <<<"$json" >/dev/null || {
+    echo "the policy log does not hold the check's own requests"
+    return 1
+  }
+  hosts=$(jq -r '(.blocked // [])[].host' <<<"$json") || return 1
+  hosts=$(sort -u <<<"$hosts" | grep -vxE '(deb\.debian\.org|dhi\.io):80' || true)
   [ -z "$hosts" ] || {
     echo "blocked:"
     echo "$hosts"
@@ -189,13 +224,31 @@ no_approval_phase() {
   mac "the create stored no approval for the service of this phase" no_approval
 }
 
-if has_secret "(global)"; then
-  echo "A global $service secret is stored in sbx. The check binds a marker as the $service secret of one sandbox"
-  echo "and must not meet a real one. Remove the global secret, or do not run this check."
-  exit 1
-fi
-has_secret "(global)" anthropic ||
+# The guard runs before the trap and before every other sbx command. When it stops the check, the cleanup has nothing
+# to undo, and no command of the check touched a secret.
+global=0
+has_secret "(global)" || global=$?
+case $global in
+  0)
+    echo "A global $service secret is stored in sbx. The check binds a marker as the $service secret of one sandbox"
+    echo "and must not meet a real one. Remove the global secret, or do not run this check."
+    exit 1
+    ;;
+  1) ;;
+  *)
+    echo "FAIL sbx secret ls does not run: the check cannot see whether a global $service secret exists"
+    exit 1
+    ;;
+esac
+
+log=$(mktemp)
+create_log=$(mktemp)
+exec 3>&1
+trap cleanup EXIT
+
+if no has_secret "(global)" anthropic; then
   echo "NOTE sbx has no global anthropic login: this run cannot show that the kit wins over such a login"
+fi
 
 mac "the kit is valid" sbx kit validate "$repo"
 
@@ -207,6 +260,7 @@ mkdir -p "$ws"
 if ! sbx env create --force --no-input --name "$name" "$env_file" >"$create_log" 2>&1; then
   tail -20 "$create_log"
   echo "FAIL create $name"
+  reported=1
   exit 1
 fi
 cat "$create_log" >>"$log"
@@ -222,15 +276,17 @@ no_approval_phase
 
 if [ -z "${KEEP:-}" ]; then
   remove_all
-  mac "no secret is left for the two sandboxes" bash -c "! sbx secret ls | grep -qE '^($name|$nb_name) '"
-  mac "no global $service secret exists" bash -c "! sbx secret ls | grep -qE '^\(global\) +service +$service'"
-  mac "the two sandboxes are gone" bash -c "! sbx ls | grep -qE '^($name|$nb_name) '"
+  mac "no secret is left for the two sandboxes" no listed "^($name|$nb_name) " secret ls
+  # The pattern has no end: it also finds a marker of the second sandbox's service in the global scope.
+  mac "no global $service secret exists" no listed "^\(global\) +service +$service" secret ls
+  mac "the two sandboxes are gone" no listed "^($name|$nb_name) " ls
 fi
 
 if [ "$fails" -gt 0 ]; then
   echo "--- the last lines of the log ---"
   tail -30 "$log"
   echo "$fails failed"
+  reported=1
   exit 1
 fi
 echo "all passed"

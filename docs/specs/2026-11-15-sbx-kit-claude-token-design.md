@@ -51,7 +51,7 @@ Probes of 2026-11-15, sbx v0.53.0, each with a marker that is no secret:
            - api.anthropic.com
    secrets:
      claude-subscription:
-       command: gopass show -o <path of the token>
+       command: /opt/homebrew/bin/gopass show -o <path of the token>
        snapshot: true
    ```
 
