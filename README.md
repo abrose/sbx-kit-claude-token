@@ -75,6 +75,8 @@ secrets:
 | `bindings` | The approval for the credential. sbx merges it into the global `~/.config/sbx/credentials.yaml`. Without it sbx does not inject the token ("no binding authorizes claude-subscription") |
 | `secrets` | The source of the token. `sbx env create` shows the command and asks for approval. The secret is stored for this sandbox only |
 
+`kit.allowedSources` in the sbx settings must allow the source of the kit.
+
 Unlock the secret store before the create. After the create, test the account:
 
 ```bash
@@ -89,9 +91,10 @@ wanted id as a second argument, and the test compares.
 | Case | What happens |
 |---|---|
 | No bound token (the store was locked, the `secrets` entry is missing) | `sbx env create` prints "required credential not found for service" and does **not** fail. In the sandbox, Claude Code says "401 Invalid bearer token". The global login is not in use |
-| A new token | Create the sandbox again, or run `sbx secret set claude-subscription --sandbox <name>` |
+| A bound token and no approval (the `bindings` entry is missing or pruned) | `sbx env create` prints "no binding authorizes" and does **not** fail. The proxy sends no token: the same 401. The global login is not in use |
+| A new token | Create the sandbox again. Or run `sbx secret set claude-subscription --sandbox <name>`, then stop and start the sandbox |
 | `sbx env rm` | Removes the secret of the sandbox. The next create reads the token again |
-| `sbx env rm --prune-bindings` | Removes the approval for **every** sandbox with this kit. Do not use it |
+| `sbx env rm --prune-bindings` | Removes the approval for **every** sandbox with this kit: they all get the 401 until a create stores the approval again. Do not use it |
 | A direct request from the VM to `claude.ai`, `mcp-proxy.anthropic.com` or `console.anthropic.com` | The proxy still sets the global login there. Claude Code makes no such request with this token |
 
 ## The echo check
@@ -99,16 +102,26 @@ wanted id as a second argument, and the test compares.
 Anthropic's answer to a request with a bound marker holds the marker in no header and not in the body
 (`tests/check.sh`, 2026-11-15). The check also finds the marker in no env variable, command line or file of the VM.
 
+Not probed: a request of other code in the VM with an `x-api-key` header, and a valid bearer of other code in a
+sandbox with no bound token.
+
 ## The tests
 
 ```bash
 bash tests/check.sh
 ```
 
-The check needs the base image `sbx-stack-base` (run `build.sh` there first). It creates the sandbox
-`check-claude-token`, asserts with no token and with a marker that is no secret, and removes the sandbox. It needs no
-token and makes no model call. It stops when a global `claude-subscription` secret exists. `KEEP=1` leaves the sandbox
-for a look after a failure.
+The check needs the base image `sbx-stack-base` (run `build.sh` there first). It needs no token and makes no model
+call. It stops when a global `claude-subscription` secret exists. `KEEP=1` leaves the sandboxes for a look after a
+failure.
+
+| Sandbox | What the check asserts |
+|---|---|
+| `check-claude-token` | With no token: the placeholder, and "Invalid bearer token" from Anthropic. With a marker that is no secret: Anthropic gets it as a bearer, and the VM holds it nowhere. Control values prove that the search of the VM works |
+| `check-claude-token-nobind` | A copy of the kit with a service name of its own, a bound marker and no approval: "Invalid bearer token" from Anthropic |
+
+The check removes both sandboxes and their markers. It leaves one thing on the Mac: the approval `claude-subscription`
+in `~/.config/sbx/credentials.yaml`, which each sandbox with this kit needs.
 
 `tests/live.sh` is the test with a real token (see above).
 

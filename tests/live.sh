@@ -45,8 +45,15 @@ check "Anthropic takes the bound token" \
     -d "{\"model\":\"claude-haiku-5-5\",\"max_tokens\":1}" https://api.anthropic.com/v1/messages >/tmp/s \
     && [ "$(cat /tmp/s)" = 400 ]'
 
-org=$(sbx exec "$name" sh -c 'grep -i "^anthropic-organization-id:" /tmp/h' 2>>"$log" | tr -d '\r' | cut -d' ' -f2)
-if [ -z "$org" ]; then
+# The headers in /tmp/h are new only when the request check passed. After a failure the file can be an old one.
+org=
+if [ "$fails" -eq 0 ]; then
+  org=$(sbx exec "$name" sh -c 'grep -i "^anthropic-organization-id:" /tmp/h' 2>>"$log" | tr -d '\r' |
+    cut -d' ' -f2) || true
+fi
+if [ "$fails" -gt 0 ]; then
+  echo "SKIP the organization of the token: a check before it failed"
+elif [ -z "$org" ]; then
   fail "Anthropic names the organization of the token"
 elif [ -z "$want" ]; then
   pass "Anthropic names the organization of the token: $org"

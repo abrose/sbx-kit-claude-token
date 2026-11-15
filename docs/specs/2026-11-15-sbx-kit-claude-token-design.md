@@ -59,7 +59,8 @@ Probes of 2026-11-15, sbx v0.53.0, each with a marker that is no secret:
    credential ("no binding authorizes claude-subscription").
 4. **No bound token:** the proxy sets nothing and does not use the global login. The API answers 401 ("Invalid
    bearer token"). `optional: false` makes `sbx env create` print "required credential not found for service". The
-   create does not fail.
+   create does not fail. **A bound token with no approval** (no `bindings` entry, or a pruned one) gives the same
+   401: the proxy sends nothing and does not use the global login (probe after the review of 2026-11-15).
 5. **The token** comes from `claude setup-token` on the Mac, with the browser logged in to the wanted account. It is
    valid for one year. The owner stores it in a secret store. `snapshot: true` reads it one time, at the create.
 
@@ -71,19 +72,24 @@ Probes of 2026-11-15, sbx v0.53.0, each with a marker that is no secret:
 - For other hosts of Anthropic (`claude.ai`, `mcp-proxy.anthropic.com`, `console.anthropic.com`) the global login
   stays in use for a direct request from the VM. Claude Code makes no such request with this token.
 - `sbx env rm --prune-bindings` removes the approval for every sandbox.
-- A new token needs a new create of the sandbox (or `sbx secret set claude-subscription --sandbox <name>`).
+- A new token needs a new create of the sandbox (or `sbx secret set claude-subscription --sandbox <name>`, then a
+  stop and a start).
 
 ## The check
 
 `tests/check.sh` creates `check-claude-token` on the base image, asserts in two phases, and removes the sandbox.
 
 - **No token:** the placeholder is in the variable; `claude auth status` says `oauth_token`; a request to
-  `https://api.anthropic.com/v1/messages` with no messages gets 401, with the placeholder and with a made-up bearer
-  (a 400 means that the global login was in use); the create log has the "required credential" line. The same after
-  a stop and a start.
+  `https://api.anthropic.com/v1/messages` with no messages gets 401 with "Invalid bearer token", with the
+  placeholder and with a made-up bearer (a 400 means that the global login was in use); the create log has the
+  "required credential" line. The same after a stop and a start.
 - **Marker** `sk-ant-oat01-marker-not-a-secret-0000000000000000`, bound for `check-claude-token` only: the API
   answers 401 with "OAuth access token is invalid"; no response header or body holds the marker (the echo check);
-  no env variable, command line or file of the VM holds it.
+  no env variable, command line or file of the VM holds it. Control values prove that these three searches can find
+  a value (they find nothing when `sudo` fails).
+- **No approval** (added after the review): a second sandbox, `check-claude-token-nobind`, from a copy of the kit
+  with a service name of its own and no `bindings` entry, with a bound marker: the API answers 401 with "Invalid
+  bearer token". So the check never touches the approval of the real service.
 - The check stops first when a global `claude-subscription` secret exists. Its last assertions: no secret and no
   sandbox is left. It never uses `--prune-bindings`.
 
